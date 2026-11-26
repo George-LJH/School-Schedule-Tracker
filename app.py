@@ -1,9 +1,13 @@
+from typing import Any
 import json
 from datetime import date, datetime, time, timedelta
 
 # pyrefly: ignore[missing-import]
 import streamlit as st
 
+# pyrefly: ignore[missing-import]
+from streamlit_local_storage import LocalStorage
+localS = LocalStorage()
 default_periods: list[tuple[str, time, int]] = [
     ("Period 1", time(17, 10, 0), 1),
     ("Period 2", time(21, 43, 0), 1),
@@ -11,19 +15,60 @@ default_periods: list[tuple[str, time, int]] = [
     ("Period 4", time(21, 47, 0), 1),
     ("Period 5", time(21, 49, 0), 1),
 ]
+from datetime import time
 
-if "screen" not in st.session_state:
-    st.session_state.screen = "Countdown"
+PRESETS: dict[str, list[tuple[str, time, int]]] = {
+    # ───── DAILY BELL SCHEDULE ─────
+    "A-Lunch • Daily": [
+        ("1st/5th Period", time(8, 50), 94),
+        ("2nd/6th Period", time(10, 33), 94),
+        ("A Lunch",        time(12, 16), 30),
+        ("3rd/7th Period", time(12, 51), 96),
+        ("4th/8th Period", time(14, 36), 94),
+    ],
+    "B-Lunch • Daily": [
+        ("1st/5th Period", time(8, 50), 94),
+        ("2nd/6th Period", time(10, 33), 94),
+        ("3rd/7th Period", time(12, 16), 47),
+        ("B Lunch",        time(13, 7), 30), 
+        ("3rd/7th Period", time(13, 41), 46),
+        ("4th/8th Period", time(14, 36), 94),
+    ],
+    "C-Lunch • Daily": [
+        ("1st/5th Period", time(8, 50), 94),
+        ("2nd/6th Period", time(10, 33), 94),
+        ("3rd/7th Period", time(12, 16), 96),
+        ("C Lunch",        time(13, 57), 30),
+        ("4th/8th Period", time(14, 36), 94),
+    ],
 
-if "choice" not in st.session_state:
-    st.session_state.choice = "Countdown"
-
-if "periods" not in st.session_state:
-    st.session_state.periods = default_periods[:]
-
-if "builderPeriods" not in st.session_state:
-    st.session_state.builderPeriods = default_periods[:]
-
+    # ───── FLEX TIME BELL SCHEDULE ─────
+    "A-Lunch • Flex Time": [
+        ("1st/5th Period", time(8, 50), 80),
+        ("2nd/6th Period", time(10, 19), 80),
+        ("Flex Time",      time(11, 39), 53),
+        ("A Lunch",        time(12, 41), 30),
+        ("3rd/7th Period", time(13, 16), 85), 
+        ("4th/8th Period", time(14, 50), 80), 
+    ],
+    "B-Lunch • Flex Time": [
+        ("1st/5th Period", time(8, 50), 80),
+        ("2nd/6th Period", time(10, 19), 80),
+        ("Flex Time",      time(11, 39), 53),
+        ("3rd/7th Period", time(12, 41), 40),
+        ("B Lunch",        time(13, 26), 30),  
+        ("3rd/7th Period", time(14, 1), 40),   
+        ("4th/8th Period", time(14, 50), 80),  
+    ],
+    "C-Lunch • Flex Time": [
+        ("1st/5th Period", time(8, 50), 80),
+        ("2nd/6th Period", time(10, 19), 80),
+        ("Flex Time",      time(11, 39), 53),
+        ("3rd/7th Period", time(12, 41), 85),
+        ("C Lunch",        time(14, 11), 30), 
+        ("4th/8th Period", time(14, 50), 80), 
+    ],
+}
 
 def PrdToJson(periods: list[tuple[str, time, int]]) -> str:
     return json.dumps(
@@ -36,6 +81,50 @@ def JsonToPrd(s: str) -> list[tuple[str, time, int]]:
     data = json.loads(s)
     return [(lbl, time.fromisoformat(t), int(dur)) for lbl, t, dur in data]
 
+LS_KEY = "school-schedule-tracker-v1"
+def lsGet(key):
+    return localS.getItem(key)
+
+def lsSet(key, val):
+    localS.setItem(key, val)
+
+def lsRemove(key):
+    localS.setItem(key, "")
+
+def saveAll() -> None:
+    data: dict[str, dict[Any, str] | str | Any] = {
+        "builderPeriods": PrdToJson(st.session_state.builderPeriods),
+        "savedSchedules": {k: PrdToJson(v) for k, v in st.session_state.savedSchedules.items()},
+        "lastUsed": st.session_state.get("lastUsed", ""),
+    }
+    lsSet(LS_KEY, json.dumps(data))
+if "lastUsed" not in st.session_state:
+    st.session_state.lastUsed = ""
+if "screen" not in st.session_state:
+    st.session_state.screen = "Countdown"
+if "choice" not in st.session_state:
+    st.session_state.choice = "Countdown"
+if "savedSchedules" not in st.session_state:
+    st.session_state.savedSchedules = {}
+if "periods" not in st.session_state:
+    raw = lsGet(LS_KEY)
+    if raw:
+        try:
+            data = json.loads(raw)
+            st.session_state.builderPeriods = JsonToPrd(data["builderPeriods"])
+            st.session_state.savedSchedules = {
+                k: JsonToPrd(v) for k, v in data.get("savedSchedules", {}).items()
+            }
+            st.session_state.lastUsed = data.get("lastUsed", "")
+        except Exception:
+            st.session_state.builderPeriods = PRESETS["A-Lunch • Daily"][:]
+            st.session_state.savedSchedules = {}
+    else:
+        st.session_state.builderPeriods = PRESETS["A-Lunch • Daily"][:]
+        st.session_state.savedSchedules = {}
+    st.session_state.periods = list(st.session_state.builderPeriods)
+    
+
 
 def handleUpload():
     f = st.session_state.get("schedule_file")
@@ -45,6 +134,7 @@ def handleUpload():
         loaded = JsonToPrd(f.read().decode())
         st.session_state.periods = loaded
         st.session_state.builderPeriods = loaded[:]
+        saveAll()
         st.session_state.upload_msg = ("success", f"Loaded {len(loaded)} periods")
     except Exception as e:
         st.session_state.upload_msg = ("error", f"Invalid .sst: {e}")
@@ -68,12 +158,14 @@ def buildSchedule(
 
 def saveToCountdown():
     st.session_state.periods = list(st.session_state.builderPeriods)
+    saveAll()
     st.session_state.choice = "Countdown"
     st.session_state.screen = "Countdown"
 
 
+
 def on_mode_change():
-    st.session_state.screen = st.session_state.choice
+    st.session_state.screen = st.session_state.get("choice", "Countdown")
 
 
 with st.sidebar:
@@ -94,7 +186,47 @@ with st.sidebar:
         PrdToJson(st.session_state.periods),
         file_name=f"Download_{datetime.now().strftime('%Y%m%d-%H%M%S')}.sst",
     )
+    newName = st.text_input("Schedule name")
+    if st.button("Save") and newName:
+        st.session_state.savedSchedules[newName] = st.session_state.builderPeriods[:]
+        st.session_state.lastUsed = newName
+        saveAll()
+        st.rerun()
+    if st.session_state.savedSchedules:
+        pick = st.selectbox("Saved", list(st.session_state.savedSchedules.keys()))
+        c1, c2 = st.columns(2)
+        if c1.button("Load"):
+            st.session_state.builderPeriods = st.session_state.savedSchedules[pick][:]
+            st.session_state.lastUsed = pick
+            saveAll()
+            st.rerun()
+        if c2.button("Delete"):
+            del st.session_state.savedSchedules[pick]
+            if st.session_state.lastUsed == pick:
+                st.session_state.lastUsed = ""
+            saveAll()
+            st.rerun()
+    if st.button("Reset to Defaults", type="secondary"):
+            lsRemove(LS_KEY)
+            st.session_state.screen = "Countdown"
+            st.session_state.choice = "Countdown"
+            st.session_state.lastUsed = ""
+            st.session_state.savedSchedules = {}
+            st.session_state.builderPeriods = PRESETS["A-Lunch • Daily"][:]
+            st.session_state.periods = list(st.session_state.builderPeriods)
+            st.rerun()
+    
+    presetChoice = st.selectbox("Load Preset", ["—"] + list(PRESETS.keys()))
 
+    if st.button("Load Preset") and presetChoice != "—":
+        try:
+            st.session_state.builderPeriods = PRESETS[presetChoice][:]
+            st.session_state.periods = list(st.session_state.builderPeriods)
+            saveAll()
+            st.toast(f"Loaded {presetChoice}")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error: {e}")
     st.radio(
         "Mode",
         ["Countdown", "Schedule Maker"],
@@ -102,7 +234,6 @@ with st.sidebar:
         key="choice",
         on_change=on_mode_change,
     )
-
 
 if st.session_state.screen == "Countdown":
     bar = st.progress(0.0, text="0%")
@@ -167,6 +298,8 @@ if st.session_state.screen == "Countdown":
 elif st.session_state.screen == "Schedule Maker":
     st.title("Schedule Maker")
 
+    changed = False
+
     for i, (label, start, dur) in enumerate(st.session_state.builderPeriods):
         cols = st.columns([3, 2, 2, 1])
         newLabel = cols[0].text_input("Name", label, key=f"lbl_{i}")
@@ -175,12 +308,20 @@ elif st.session_state.screen == "Schedule Maker":
 
         if cols[3].button("Clear", key=f"del_{i}"):
             st.session_state.builderPeriods.pop(i)
+            changed = True
             st.rerun()
 
-        st.session_state.builderPeriods[i] = (newLabel, newStart, newDur)
+        new_tuple = (newLabel, newStart, newDur)
+        if new_tuple != st.session_state.builderPeriods[i]:
+            st.session_state.builderPeriods[i] = new_tuple
+            changed = True
 
     if st.button("+ Add Period"):
         st.session_state.builderPeriods.append(("New", time(9, 0), 45))
+        saveAll()
         st.rerun()
+
+    if changed:
+        saveAll()
 
     st.button("Save To Countdown", on_click=saveToCountdown)
