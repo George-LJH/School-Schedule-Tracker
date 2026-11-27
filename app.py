@@ -1,12 +1,18 @@
 from typing import Any
 import json
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 # pyrefly: ignore[missing-import]
 import streamlit as st
 
 # pyrefly: ignore[missing-import]
 from streamlit_local_storage import LocalStorage
+
+tzoff = st.context.timezone_offset   # offset in minutes
+tz_obj = timezone(-timedelta(minutes=tzoff))
+def now_local() -> datetime:
+    # UTC now → shift by user offset
+    return datetime.now(timezone.utc).astimezone(tz_obj)
 localS = LocalStorage()
 default_periods: list[tuple[str, time, int]] = [
     ("Period 1", time(17, 10, 0), 1),
@@ -15,7 +21,6 @@ default_periods: list[tuple[str, time, int]] = [
     ("Period 4", time(21, 47, 0), 1),
     ("Period 5", time(21, 49, 0), 1),
 ]
-from datetime import time
 
 PRESETS: dict[str, list[tuple[str, time, int]]] = {
     # ───── DAILY BELL SCHEDULE ─────
@@ -140,21 +145,25 @@ def handleUpload():
         st.session_state.upload_msg = ("error", f"Invalid .sst: {e}")
 
 
-def buildSchedule(
-    periods: list[tuple[str, time, int]],
-) -> list[tuple[str, time, time]]:
-    schedule: list[tuple[str, time, time]] = []
+def buildSchedule(periods: list[tuple[str, time, int]]) -> list[tuple[str, datetime, datetime]]:
+    schedule: list[tuple[str, datetime, datetime]] = []
+    
+    base_date = now_local().date()
+    
     for i, (label, start, length) in enumerate(periods):
-        period_end = (
-            datetime.combine(date.today(), start) + timedelta(minutes=length)
-        ).time()
-        schedule.append((label, start, period_end))
+        start_dt = datetime.combine(base_date, start, tzinfo=tz_obj)
+        end_dt = start_dt + timedelta(minutes=length)
+        
+        schedule.append((label, start_dt, end_dt))
+        
         if i + 1 < len(periods):
-            next_start = periods[i + 1][1]
-            if period_end < next_start:
-                schedule.append(("Break", period_end, next_start))
+            next_start_naive = periods[i + 1][1]
+            next_start_dt = datetime.combine(base_date, next_start_naive, tzinfo=tz_obj)
+            
+            if end_dt < next_start_dt:
+                schedule.append(("Break", end_dt, next_start_dt))
+    
     return schedule
-
 
 def saveToCountdown():
     st.session_state.periods = list(st.session_state.builderPeriods)
@@ -241,21 +250,18 @@ if st.session_state.screen == "Countdown":
 
     @st.fragment(run_every="1s")
     def showTime():
-        nowDt = datetime.now().replace(microsecond=0)
-        nowTime = nowDt.time()
+        nowDt = now_local().replace(microsecond=0)
 
         schedule = buildSchedule(st.session_state.periods)
 
         active_block = None
-        for label, start, end in schedule:
-            if start <= nowTime < end:
-                active_block = (label, start, end)
+        for label, start_dt, end_dt in schedule:
+            if start_dt <= nowDt < end_dt:
+                active_block = (label, start_dt, end_dt)
                 break
 
         if active_block is not None:
-            label, start_time, end_time = active_block
-            start_dt = datetime.combine(nowDt.date(), start_time)
-            end_dt = datetime.combine(nowDt.date(), end_time)
+            label, start_dt, end_dt = active_block
 
             total_sec = (end_dt - start_dt).total_seconds()
             elapsed_sec = (nowDt - start_dt).total_seconds()
@@ -275,10 +281,10 @@ if st.session_state.screen == "Countdown":
             st.write(nowDt)
             return
 
-        if schedule and nowTime < schedule[0][1]:
-            first_label, first_start, _ = schedule[0]
-            start_dt = datetime.combine(nowDt.date(), first_start)
-            dif = start_dt - nowDt
+
+        if schedule and nowDt < schedule[0][1]:
+            first_label, first_start_dt, _ = schedule[0]
+            dif = first_start_dt - nowDt
             rem_sec = int(dif.total_seconds())
             h, m, s = rem_sec // 3600, (rem_sec % 3600) // 60, rem_sec % 60
 
