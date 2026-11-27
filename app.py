@@ -179,6 +179,7 @@ def on_mode_change():
 
 with st.sidebar:
     st.header("Schedule file")
+
     st.file_uploader(
         "Upload a .sst file",
         type=".sst",
@@ -194,40 +195,43 @@ with st.sidebar:
         "Download current schedule",
         PrdToJson(st.session_state.periods),
         file_name=f"Download_{datetime.now().strftime('%Y%m%d-%H%M%S')}.sst",
+        key="download_schedule",
     )
-    newName = st.text_input("Schedule name")
-    if st.button("Save") and newName:
+
+    newName = st.text_input("Schedule name", key="new_schedule_name")
+    if st.button("Save", key="save_schedule") and newName:
         st.session_state.savedSchedules[newName] = st.session_state.builderPeriods[:]
         st.session_state.lastUsed = newName
         saveAll()
         st.rerun()
+
     if st.session_state.savedSchedules:
-        pick = st.selectbox("Saved", list(st.session_state.savedSchedules.keys()))
+        pick = st.selectbox("Saved", list(st.session_state.savedSchedules.keys()), key="saved_schedule_pick")
         c1, c2 = st.columns(2)
-        if c1.button("Load"):
+        if c1.button("Load", key="load_saved_schedule"):
             st.session_state.builderPeriods = st.session_state.savedSchedules[pick][:]
             st.session_state.lastUsed = pick
             saveAll()
             st.rerun()
-        if c2.button("Delete"):
+        if c2.button("Delete", key="delete_saved_schedule"):
             del st.session_state.savedSchedules[pick]
             if st.session_state.lastUsed == pick:
                 st.session_state.lastUsed = ""
             saveAll()
             st.rerun()
-    if st.button("Reset to Defaults", type="secondary"):
-            lsRemove(LS_KEY)
-            st.session_state.screen = "Countdown"
-            st.session_state.choice = "Countdown"
-            st.session_state.lastUsed = ""
-            st.session_state.savedSchedules = {}
-            st.session_state.builderPeriods = PRESETS["A-Lunch • Daily"][:]
-            st.session_state.periods = list(st.session_state.builderPeriods)
-            st.rerun()
-    
-    presetChoice = st.selectbox("Load Preset", ["—"] + list(PRESETS.keys()))
 
-    if st.button("Load Preset") and presetChoice != "—":
+    if st.button("Reset to Defaults", type="secondary", key="reset_defaults"):
+        lsRemove(LS_KEY)
+        st.session_state.screen = "Countdown"
+        st.session_state.choice = "Countdown"
+        st.session_state.lastUsed = ""
+        st.session_state.savedSchedules = {}
+        st.session_state.builderPeriods = PRESETS["A-Lunch • Daily"][:]
+        st.session_state.periods = list(st.session_state.builderPeriods)
+        st.rerun()
+
+    presetChoice = st.selectbox("Load Preset", ["—"] + list(PRESETS.keys()), key="preset_choice")
+    if st.button("Load Preset", key="load_preset") and presetChoice != "—":
         try:
             st.session_state.builderPeriods = PRESETS[presetChoice][:]
             st.session_state.periods = list(st.session_state.builderPeriods)
@@ -236,6 +240,7 @@ with st.sidebar:
             st.rerun()
         except Exception as e:
             st.error(f"Error: {e}")
+
     st.radio(
         "Mode",
         ["Countdown", "Schedule Maker"],
@@ -243,62 +248,66 @@ with st.sidebar:
         key="choice",
         on_change=on_mode_change,
     )
-
 if st.session_state.screen == "Countdown":
-    bar = st.progress(0.0, text="0%")
     st.title("School Schedule Tracker")
 
     @st.fragment(run_every="1s")
     def showTime():
         nowDt = now_local().replace(microsecond=0)
-
         schedule = buildSchedule(st.session_state.periods)
 
+        # ── COMPUTE ──
         active_block = None
         for label, start_dt, end_dt in schedule:
             if start_dt <= nowDt < end_dt:
                 active_block = (label, start_dt, end_dt)
                 break
 
-        if active_block is not None:
+        if active_block:
             label, start_dt, end_dt = active_block
-
             total_sec = (end_dt - start_dt).total_seconds()
             elapsed_sec = (nowDt - start_dt).total_seconds()
-            progress = (
-                max(0.0, min(1.0, elapsed_sec / total_sec))
-                if total_sec > 0
-                else 1.0
-            )
-
-            dif = end_dt - nowDt
-            rem_sec = int(dif.total_seconds())
-            h, m, s = rem_sec // 3600, (rem_sec % 3600) // 60, rem_sec % 60
-
-            bar.progress(progress)
-            st.header(f"{label} in progress ({progress:.0%})")
-            st.write(f"Remaining: {h:02d}:{m:02d}:{s:02d}")
-            st.write(nowDt)
-            return
-
-
-        if schedule and nowDt < schedule[0][1]:
+            progress = max(0.0, min(1.0, elapsed_sec / total_sec)) if total_sec > 0 else 1.0
+            rem_sec = int((end_dt - nowDt).total_seconds())
+            status = "in_progress"
+            current_label = label
+        elif schedule and nowDt < schedule[0][1]:
             first_label, first_start_dt, _ = schedule[0]
-            dif = first_start_dt - nowDt
-            rem_sec = int(dif.total_seconds())
-            h, m, s = rem_sec // 3600, (rem_sec % 3600) // 60, rem_sec % 60
+            progress = 0.0
+            rem_sec = int((first_start_dt - nowDt).total_seconds())
+            status = "waiting"
+            current_label = first_label
+        else:
+            progress = 1.0
+            rem_sec = 0
+            status = "ended"
+            current_label = None
 
-            bar.progress(0.0)
-            st.header(f"Waiting for {first_label} to start")
-            st.write(f"Starts in: {h:02d}:{m:02d}:{s:02d}")
-            st.write(nowDt)
-            return
+        h, m, s = rem_sec // 3600, (rem_sec % 3600) // 60, rem_sec % 60
 
-        bar.progress(1.0)
-        st.header("School day ended")
+        # ── RENDER (in visual order) ──
+        bar = st.progress(progress, text=f"{int(progress*100)}%")
+
+        if status == "in_progress":
+            st.header(f"{current_label} in progress ({progress:.0%})", text_alignment="center")
+            st.header(f"Remaining: {h:02d}:{m:02d}:{s:02d}", text_alignment="center")
+        elif status == "waiting":
+            st.header(f"Waiting for {current_label} to start", text_alignment="center")
+            st.header(f"Starts in: {h:02d}:{m:02d}:{s:02d}", text_alignment="center")
+        else:
+            st.header("School day ended", text_alignment="center")
+
         st.write(nowDt)
 
+        # Table last
+        tableData = [
+            {"Period": label, "Start": s.strftime("%H:%M"), "End": e.strftime("%H:%M")}
+            for label, s, e in schedule
+        ]
+        st.table(tableData)
     showTime()
+
+
 
 
 elif st.session_state.screen == "Schedule Maker":
