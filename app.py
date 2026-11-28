@@ -8,9 +8,9 @@ import streamlit as st
 # pyrefly: ignore[missing-import]
 from streamlit_local_storage import LocalStorage
 
-tzoff = st.context.timezone_offset   # offset in minutes
+tzoff: int | None = st.context.timezone_offset   # offset in minutes
 tz_obj = timezone(-timedelta(minutes=tzoff))
-def now_local() -> datetime:
+def nowLocal() -> datetime:
     # UTC now → shift by user offset
     return datetime.now(timezone.utc).astimezone(tz_obj)
 localS = LocalStorage()
@@ -86,7 +86,8 @@ def JsonToPrd(s: str) -> list[tuple[str, time, int]]:
     data = json.loads(s)
     return [(lbl, time.fromisoformat(t), int(dur)) for lbl, t, dur in data]
 
-LS_KEY = "school-schedule-tracker-v1"
+SCHEDULE_KEY = "school-schedule-tracker-v1"
+TODO_KEY = "to-do-list-v1"
 def lsGet(key):
     return localS.getItem(key)
 
@@ -102,17 +103,18 @@ def saveAll() -> None:
         "savedSchedules": {k: PrdToJson(v) for k, v in st.session_state.savedSchedules.items()},
         "lastUsed": st.session_state.get("lastUsed", ""),
     }
-    lsSet(LS_KEY, json.dumps(data))
+    lsSet(SCHEDULE_KEY, json.dumps(data))
+def saveTodos():
+    lsSet(TODO_KEY, json.dumps(st.session_state.todos))
+
 if "lastUsed" not in st.session_state:
     st.session_state.lastUsed = ""
 if "screen" not in st.session_state:
     st.session_state.screen = "Countdown"
-if "choice" not in st.session_state:
-    st.session_state.choice = "Countdown"
 if "savedSchedules" not in st.session_state:
     st.session_state.savedSchedules = {}
 if "periods" not in st.session_state:
-    raw = lsGet(LS_KEY)
+    raw = lsGet(SCHEDULE_KEY)
     if raw:
         try:
             data = json.loads(raw)
@@ -128,6 +130,16 @@ if "periods" not in st.session_state:
         st.session_state.builderPeriods = PRESETS["A-Lunch • Daily"][:]
         st.session_state.savedSchedules = {}
     st.session_state.periods = list(st.session_state.builderPeriods)
+if "todos" not in st.session_state:
+    raw = lsGet(TODO_KEY)
+    if raw:
+        try:
+            st.session_state.todos = json.loads(raw)
+        except Exception:
+            st.session_state.todos = []
+    else:
+        st.session_state.todos = []
+    st.write(task)
     
 
 
@@ -148,7 +160,7 @@ def handleUpload():
 def buildSchedule(periods: list[tuple[str, time, int]]) -> list[tuple[str, datetime, datetime]]:
     schedule: list[tuple[str, datetime, datetime]] = []
     
-    base_date = now_local().date()
+    base_date = nowLocal().date()
     
     for i, (label, start, length) in enumerate(periods):
         start_dt = datetime.combine(base_date, start, tzinfo=tz_obj)
@@ -168,92 +180,88 @@ def buildSchedule(periods: list[tuple[str, time, int]]) -> list[tuple[str, datet
 def saveToCountdown():
     st.session_state.periods = list(st.session_state.builderPeriods)
     saveAll()
-    st.session_state.choice = "Countdown"
     st.session_state.screen = "Countdown"
 
 
 
-def on_mode_change():
-    st.session_state.screen = st.session_state.get("choice", "Countdown")
-
-
-with st.sidebar:
-    st.header("Schedule file")
-
-    st.file_uploader(
-        "Upload a .sst file",
-        type=".sst",
-        key="schedule_file",
-        on_change=handleUpload,
-    )
-    msg = st.session_state.pop("upload_msg", None)
-    if msg:
-        kind, text = msg
-        getattr(st.sidebar, kind)(text)
-
-    st.download_button(
-        "Download current schedule",
-        PrdToJson(st.session_state.periods),
-        file_name=f"Download_{datetime.now().strftime('%Y%m%d-%H%M%S')}.sst",
-        key="download_schedule",
-    )
-
-    newName = st.text_input("Schedule name", key="new_schedule_name")
-    if st.button("Save", key="save_schedule") and newName:
-        st.session_state.savedSchedules[newName] = st.session_state.builderPeriods[:]
-        st.session_state.lastUsed = newName
-        saveAll()
-        st.rerun()
-
-    if st.session_state.savedSchedules:
-        pick = st.selectbox("Saved", list(st.session_state.savedSchedules.keys()), key="saved_schedule_pick")
-        c1, c2 = st.columns(2)
-        if c1.button("Load", key="load_saved_schedule"):
-            st.session_state.builderPeriods = st.session_state.savedSchedules[pick][:]
-            st.session_state.lastUsed = pick
-            saveAll()
-            st.rerun()
-        if c2.button("Delete", key="delete_saved_schedule"):
-            del st.session_state.savedSchedules[pick]
-            if st.session_state.lastUsed == pick:
-                st.session_state.lastUsed = ""
-            saveAll()
-            st.rerun()
-
-    if st.button("Reset to Defaults", type="secondary", key="reset_defaults"):
-        lsRemove(LS_KEY)
+with st.container(horizontal=True):
+    if st.button("Countdown", key="nav_countdown"):
         st.session_state.screen = "Countdown"
-        st.session_state.choice = "Countdown"
-        st.session_state.lastUsed = ""
-        st.session_state.savedSchedules = {}
-        st.session_state.builderPeriods = PRESETS["A-Lunch • Daily"][:]
-        st.session_state.periods = list(st.session_state.builderPeriods)
-        st.rerun()
+    if st.button("Schedule Maker", key="nav_maker"):
+        st.session_state.screen = "Schedule Maker"
+    if st.button("Todo List", key="nav_todo"):
+        st.session_state.screen = "Todo List"
+if st.session_state.screen == "Countdown" or st.session_state.screen == "Schedule Maker":
+    with st.sidebar:
+        st.header("Schedule Settings")
 
-    presetChoice = st.selectbox("Load Preset", ["—"] + list(PRESETS.keys()), key="preset_choice")
-    if st.button("Load Preset", key="load_preset") and presetChoice != "—":
-        try:
-            st.session_state.builderPeriods = PRESETS[presetChoice][:]
-            st.session_state.periods = list(st.session_state.builderPeriods)
+        st.file_uploader(
+            "Upload a .sst file",
+            type=".sst",
+            key="schedule_file",
+            on_change=handleUpload,
+        )
+        msg = st.session_state.pop("upload_msg", None)
+        if msg:
+            kind, text = msg
+            getattr(st.sidebar, kind)(text)
+
+        st.download_button(
+            "Download current schedule",
+            PrdToJson(st.session_state.periods),
+            file_name=f"Download_{datetime.now().strftime('%Y%m%d-%H%M%S')}.sst",
+            key="download_schedule",
+        )
+
+        newName = st.text_input("Schedule name", key="new_schedule_name")
+        if st.button("Save", key="save_schedule") and newName:
+            st.session_state.savedSchedules[newName] = st.session_state.builderPeriods[:]
+            st.session_state.lastUsed = newName
             saveAll()
-            st.toast(f"Loaded {presetChoice}")
             st.rerun()
-        except Exception as e:
-            st.error(f"Error: {e}")
 
-    st.radio(
-        "Mode",
-        ["Countdown", "Schedule Maker"],
-        horizontal=True,
-        key="choice",
-        on_change=on_mode_change,
-    )
+        if st.session_state.savedSchedules:
+            pick = st.selectbox("Saved", list(st.session_state.savedSchedules.keys()), key="saved_schedule_pick")
+            c1, c2 = st.columns(2)
+            if c1.button("Load", key="load_saved_schedule"):
+                st.session_state.builderPeriods = st.session_state.savedSchedules[pick][:]
+                st.session_state.lastUsed = pick
+                saveAll()
+                st.rerun()
+            if c2.button("Delete", key="delete_saved_schedule"):
+                del st.session_state.savedSchedules[pick]
+                if st.session_state.lastUsed == pick:
+                    st.session_state.lastUsed = ""
+                saveAll()
+                st.rerun()
+
+        if st.button("Reset to Defaults", type="secondary", key="reset_defaults"):
+            lsRemove(SCHEDULE_KEY)
+            st.session_state.screen = "Countdown"
+            st.session_state.lastUsed = ""
+            st.session_state.savedSchedules = {}
+            st.session_state.builderPeriods = PRESETS["A-Lunch • Daily"][:]
+            st.session_state.periods = list(st.session_state.builderPeriods)
+            st.rerun()
+
+        presetChoice = st.selectbox("Load Preset", ["—"] + list(PRESETS.keys()), key="preset_choice")
+        if st.button("Load Preset", key="load_preset") and presetChoice != "—":
+            try:
+                st.session_state.builderPeriods = PRESETS[presetChoice][:]
+                st.session_state.periods = list(st.session_state.builderPeriods)
+                saveAll()
+                st.toast(f"Loaded {presetChoice}")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+
 if st.session_state.screen == "Countdown":
     st.title("School Schedule Tracker")
 
     @st.fragment(run_every="1s")
     def showTime():
-        nowDt = now_local().replace(microsecond=0)
+        nowDt = nowLocal().replace(microsecond=0)
         schedule = buildSchedule(st.session_state.periods)
 
         # ── COMPUTE ──
@@ -340,3 +348,8 @@ elif st.session_state.screen == "Schedule Maker":
         saveAll()
 
     st.button("Save To Countdown", on_click=saveToCountdown)
+elif st.session_state.screen == "Todo List":
+    st.title("Todo List")
+
+    newText = st.text_input("New task", key = "newTodoText")
+    if st.button("Add", key = "addTodo")
